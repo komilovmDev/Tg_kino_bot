@@ -98,6 +98,22 @@ dist
 # Sveltekit cache directory
 .svelte-kit/
 
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.venv/
+pyvenv.cfg
+
+# dotenv
+.env
+.env.*
+!.env.example
+
 # vitepress build output
 **/.vitepress/dist
 

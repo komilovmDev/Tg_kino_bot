@@ -1,0 +1,2 @@
+aiogram==2.26.1
+dotenv==1.0.0

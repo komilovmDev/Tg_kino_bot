@@ -15,8 +15,8 @@ ADMIN_ID = int(os.getenv('ADMIN_ID', 2064891580))
 
 if not API_TOKEN:
     raise RuntimeError('API_TOKEN is not set')
-if not ADMIN_ID:
-    raise RuntimeError('ADMIN_ID is not set')
+# if not ADMIN_ID:
+#     raise RuntimeError('ADMIN_ID is not set')
 
 bot = Bot(token=API_TOKEN)
 dp = Dispatcher(bot)

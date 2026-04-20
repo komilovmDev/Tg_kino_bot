@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import os
+import time
 from functools import wraps
 
 from aiogram import Bot, Dispatcher, types
@@ -26,7 +27,10 @@ if not ADMIN_ID:
 bot = Bot(token=API_TOKEN)
 dp = Dispatcher(bot)
 
-CHANNEL_USERNAME = '@spritefx_tp'
+CHANNELS = [
+    '@spritefx_tp',
+    # '@kanal2',
+]
 CHANNEL_ID = -1003928462353
 KINO_DB_FILE = 'kino_db.json'
 
@@ -38,13 +42,19 @@ LANG_FLAGS = {
     'ja': '🇯🇵 JA', 'ko': '🇰🇷 KO', 'hi': '🇮🇳 HI', 'fa': '🇮🇷 FA',
 }
 
+last_used: dict = {}
+
 
 # ─── KINO DB ──────────────────────────────────────────────────────────────────
 
 def load_kino_db() -> dict:
     if os.path.exists(KINO_DB_FILE):
         with open(KINO_DB_FILE, 'r', encoding='utf-8') as f:
-            return json.load(f)
+            data = json.load(f)
+        for k, v in data.items():
+            if isinstance(v, int):
+                data[k] = {'msg_id': v, 'count': 0}
+        return data
     return {}
 
 
@@ -69,12 +79,15 @@ async def fetch_and_save_photo(user_id: int):
 
 
 async def check_sub(user_id: int) -> bool:
-    try:
-        member = await bot.get_chat_member(CHANNEL_USERNAME, user_id)
-        return member.status in ['member', 'creator', 'administrator']
-    except Exception as e:
-        logging.warning(f'check_sub error for {user_id}: {e}')
-        return False
+    for ch in CHANNELS:
+        try:
+            member = await bot.get_chat_member(ch, user_id)
+            if member.status not in ['member', 'creator', 'administrator']:
+                return False
+        except Exception as e:
+            logging.warning(f'check_sub error for {user_id} in {ch}: {e}')
+            return False
+    return True
 
 
 def admin_only(func):
@@ -87,7 +100,7 @@ def admin_only(func):
     return wrapper
 
 
-# ─── MIDDLEWARE: авто-регистрация пользователей ───────────────────────────────
+# ─── MIDDLEWARE ───────────────────────────────────────────────────────────────
 
 class UserMiddleware(BaseMiddleware):
     async def on_pre_process_message(self, message: types.Message, _data: dict):
@@ -110,12 +123,11 @@ dp.middleware.setup(UserMiddleware())
 async def start_handler(message: Message):
     if not await check_sub(message.from_user.id):
         btn = types.InlineKeyboardMarkup()
-        btn.add(types.InlineKeyboardButton(
-            "📢 Obuna bo'lish", url=f"https://t.me/{CHANNEL_USERNAME[1:]}"
-        ))
+        for ch in CHANNELS:
+            btn.add(types.InlineKeyboardButton(f"📢 {ch}", url=f"https://t.me/{ch[1:]}"))
         btn.add(types.InlineKeyboardButton("✅ Tekshirish", callback_data="check_sub"))
         await message.answer(
-            "❗ Botdan foydalanish uchun kanalga obuna bo'ling:",
+            "❗ Botdan foydalanish uchun kanallarga obuna bo'ling:",
             reply_markup=btn
         )
         return
@@ -125,7 +137,7 @@ async def start_handler(message: Message):
 @dp.callback_query_handler(lambda c: c.data == "check_sub")
 async def check_button(call: types.CallbackQuery):
     if await check_sub(call.from_user.id):
-        await call.message.edit_text("✅ Rahmat! Endi kod yuboring.")
+        await call.message.edit_text("✅ Endi foydalanishingiz mumkin!")
     else:
         await call.answer("❌ Hali obuna bo'lmadingiz", show_alert=True)
 
@@ -135,14 +147,14 @@ async def test(message: Message):
     await message.answer("✅ Bot ishlayapti!")
 
 
-# ─── ADMIN: KINO MANAGEMENT ───────────────────────────────────────────────────
+# ─── ADMIN: KINO ──────────────────────────────────────────────────────────────
 
 @dp.message_handler(commands=['add'])
 @admin_only
 async def add_kino(message: Message):
     try:
         _, kod, msg_id = message.text.split()
-        kino_db[kod.lower()] = int(msg_id)
+        kino_db[kod.lower()] = {'msg_id': int(msg_id), 'count': 0}
         save_kino_db(kino_db)
         await message.answer(f"✅ Qo'shildi: {kod} → {msg_id}")
     except ValueError:
@@ -171,8 +183,19 @@ async def list_kino(message: Message):
     if not kino_db:
         await message.answer("📭 Bazada hech narsa yo'q.")
         return
-    lines = [f"{kod} → {msg_id}" for kod, msg_id in sorted(kino_db.items())]
+    lines = [f"{kod} — {v['count']} ko'rildi" for kod, v in sorted(kino_db.items())]
     await message.answer("📋 Barcha kinolar:\n\n" + "\n".join(lines))
+
+
+@dp.message_handler(commands=['top'])
+@admin_only
+async def top_kino(message: Message):
+    if not kino_db:
+        await message.answer("📭 Bo'sh")
+        return
+    sorted_kino = sorted(kino_db.items(), key=lambda x: x[1]['count'], reverse=True)
+    lines = [f"{i}. {kod} — {v['count']} marta" for i, (kod, v) in enumerate(sorted_kino[:10], 1)]
+    await message.answer("📈 TOP kinolar:\n\n" + "\n".join(lines))
 
 
 # ─── ADMIN: СТАТИСТИКА ────────────────────────────────────────────────────────
@@ -192,13 +215,12 @@ async def stat_handler(message: Message):
             lang_lines.append(f"{LANG_FLAGS[code]}: {pct}%")
         else:
             other_count += row['cnt']
-
     if other_count:
         lang_lines.append(f"🏳️ Прочие: {round(other_count / total * 100, 1)}%")
 
     langs_text = "\n".join(lang_lines) if lang_lines else "Нет данных"
 
-    text = (
+    await message.answer(
         f"📊 Статистика\n\n"
         f"Пользователи:\n"
         f"👥 Всего: {s['total']}\n"
@@ -213,9 +235,9 @@ async def stat_handler(message: Message):
         f"💬 Активных (24ч): {s['active_24h']}\n"
         f"✅ Запросов: {s['searches_today']} / {s['searches_7d']}\n"
         f"   (сегодня / 7д)\n\n"
+        f"🎬 Кино в базе: {len(kino_db)}\n"
         f"📈 Ср. запросов/юзер: {s['avg_searches']}"
     )
-    await message.answer(text)
 
 
 # ─── ADMIN: ПРОФИЛЬ ПОЛЬЗОВАТЕЛЯ ─────────────────────────────────────────────
@@ -227,7 +249,6 @@ async def user_profile(message: Message):
     if len(parts) < 2:
         await message.answer("❌ Format: /user 123456789")
         return
-
     try:
         uid = int(parts[1])
     except ValueError:
@@ -270,9 +291,7 @@ async def user_profile(message: Message):
 
     if user['photo_file_id']:
         await message.answer_photo(
-            photo=user['photo_file_id'],
-            caption=caption,
-            parse_mode='HTML'
+            photo=user['photo_file_id'], caption=caption, parse_mode='HTML'
         )
     else:
         await message.answer(caption, parse_mode='HTML')
@@ -287,11 +306,9 @@ async def save_post(message: types.Message):
         kod = message.caption.strip().lower()
     elif message.text:
         kod = message.text.strip().lower()
-
     if not kod:
         return
-
-    kino_db[kod] = message.message_id
+    kino_db[kod] = {'msg_id': message.message_id, 'count': 0}
     save_kino_db(kino_db)
     logging.info(f"Saved from channel: {kod} → {message.message_id}")
 
@@ -300,6 +317,12 @@ async def save_post(message: types.Message):
 
 @dp.message_handler(content_types=types.ContentType.ANY)
 async def message_handler(message: Message):
+    user_id = message.from_user.id
+
+    if user_id in last_used and time.time() - last_used[user_id] < 2:
+        return
+    last_used[user_id] = time.time()
+
     if message.forward_from_chat:
         logging.info(f"Forward message ID: {message.forward_from_message_id}")
         return
@@ -307,27 +330,31 @@ async def message_handler(message: Message):
     if not message.text or message.text.startswith('/'):
         return
 
-    if not await check_sub(message.from_user.id):
-        await message.answer("❗ Avval kanalga obuna bo'ling /start")
+    if not await check_sub(user_id):
+        await message.answer("❗ Avval obuna bo'ling /start")
         return
 
-    kod = message.text.lower()
+    kod = message.text.strip().lower()
     found = kod in kino_db
 
-    await db.log_search(message.from_user.id, kod, found)
+    await db.log_search(user_id, kod, found)
 
     if not found:
         await message.answer("❌ Bunday kod yo'q.")
         return
 
+    entry = kino_db[kod]
+    entry['count'] += 1
+    save_kino_db(kino_db)
+
     try:
         await bot.copy_message(
             chat_id=message.chat.id,
             from_chat_id=CHANNEL_ID,
-            message_id=kino_db[kod]
+            message_id=entry['msg_id']
         )
     except BotBlocked:
-        await db.mark_blocked(message.from_user.id)
+        await db.mark_blocked(user_id)
     except Exception as e:
         logging.error(f"copy_message error for kod={kod}: {e}")
         await message.answer("❌ Kino topilmadi yoki xatolik.")

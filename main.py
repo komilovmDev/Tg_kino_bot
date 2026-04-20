@@ -23,18 +23,17 @@ if not API_TOKEN:
 bot = Bot(token=API_TOKEN)
 dp = Dispatcher(bot)
 
-# ─── CONFIG ─────────────────────────────
-CHANNELS = ['@spritefx_tp']
-CHANNEL_ID = -1003928462353
-
+# ─────────────────────────────────────────
+# FILES
+# ─────────────────────────────────────────
 KINO_DB_FILE = "kino_db.json"
-USERS_FILE = "users.json"
+CHANNEL_FILE = "channels.json"
 
 last_used = {}
-users = set()
 
-
-# ─── DB HELPERS ─────────────────────────
+# ─────────────────────────────────────────
+# LOAD/SAVE HELPERS
+# ─────────────────────────────────────────
 def load_json(file, default):
     if os.path.exists(file):
         with open(file, "r", encoding="utf-8") as f:
@@ -48,9 +47,23 @@ def save_json(file, data):
 
 
 kino_db = load_json(KINO_DB_FILE, {})
+CHANNELS = load_json(CHANNEL_FILE, ["@spritefx_tp"])
+
+# ─────────────────────────────────────────
+# ADMIN CHECK
+# ─────────────────────────────────────────
+def admin_only(func):
+    @wraps(func)
+    async def wrapper(message: Message):
+        if message.from_user.id != ADMIN_ID:
+            return await message.answer("❌ Ruxsat yo‘q")
+        return await func(message)
+    return wrapper
 
 
-# ─── SUB CHECK ─────────────────────────
+# ─────────────────────────────────────────
+# CHECK SUB
+# ─────────────────────────────────────────
 async def check_sub(user_id: int):
     for ch in CHANNELS:
         try:
@@ -62,30 +75,30 @@ async def check_sub(user_id: int):
     return True
 
 
-# ─── ADMIN DECORATOR ────────────────────
-def admin_only(func):
-    @wraps(func)
-    async def wrapper(message: Message):
-        if message.from_user.id != ADMIN_ID:
-            return await message.answer("❌ Ruxsat yo‘q")
-        return await func(message)
-    return wrapper
-
-
-# ─── START ─────────────────────────────
+# ─────────────────────────────────────────
+# START
+# ─────────────────────────────────────────
 @dp.message_handler(commands=["start"])
 async def start(message: Message):
     if not await check_sub(message.from_user.id):
         kb = types.InlineKeyboardMarkup()
+
         for ch in CHANNELS:
             kb.add(types.InlineKeyboardButton(f"📢 {ch}", url=f"https://t.me/{ch[1:]}"))
+
         kb.add(types.InlineKeyboardButton("✅ Tekshirish", callback_data="check"))
-        return await message.answer("❗ Avval obuna bo‘ling:", reply_markup=kb)
+
+        return await message.answer(
+            "❗ Botdan foydalanish uchun kanallarga obuna bo‘ling:",
+            reply_markup=kb
+        )
 
     await message.answer("🎬 Kino botga xush kelibsiz!\nKod yuboring (k1, k2 ...)")
 
 
-# ─── CHECK SUB BUTTON ───────────────────
+# ─────────────────────────────────────────
+# CHECK BUTTON
+# ─────────────────────────────────────────
 @dp.callback_query_handler(lambda c: c.data == "check")
 async def check(call: types.CallbackQuery):
     if await check_sub(call.from_user.id):
@@ -94,7 +107,9 @@ async def check(call: types.CallbackQuery):
         await call.answer("❌ Hali obuna bo‘lmadingiz", show_alert=True)
 
 
-# ─── ADD KINO ───────────────────────────
+# ─────────────────────────────────────────
+# ADD KINO
+# ─────────────────────────────────────────
 @dp.message_handler(commands=["add"])
 @admin_only
 async def add_kino(message: Message):
@@ -102,12 +117,14 @@ async def add_kino(message: Message):
         _, kod, msg_id = message.text.split()
         kino_db[kod.lower()] = {"msg_id": int(msg_id), "count": 0}
         save_json(KINO_DB_FILE, kino_db)
-        await message.answer("✅ Qo‘shildi")
+        await message.answer("✅ Kino qo‘shildi")
     except:
         await message.answer("❌ Format: /add k1 123")
 
 
-# ─── DELETE KINO ────────────────────────
+# ─────────────────────────────────────────
+# DELETE KINO
+# ─────────────────────────────────────────
 @dp.message_handler(commands=["delete"])
 @admin_only
 async def delete_kino(message: Message):
@@ -118,14 +135,16 @@ async def delete_kino(message: Message):
         if kod in kino_db:
             del kino_db[kod]
             save_json(KINO_DB_FILE, kino_db)
-            await message.answer("✅ O‘chirildi")
+            await message.answer("❌ O‘chirildi")
         else:
             await message.answer("❌ Topilmadi")
     except:
         await message.answer("❌ Format: /delete k1")
 
 
-# ─── TOP LIST ───────────────────────────
+# ─────────────────────────────────────────
+# TOP KINO
+# ─────────────────────────────────────────
 @dp.message_handler(commands=["top"])
 @admin_only
 async def top(message: Message):
@@ -141,18 +160,70 @@ async def top(message: Message):
     await message.answer(text)
 
 
-# ─── STATS ──────────────────────────────
+# ─────────────────────────────────────────
+# STATS
+# ─────────────────────────────────────────
 @dp.message_handler(commands=["stats"])
 @admin_only
 async def stats(message: Message):
     await message.answer(
         f"📊 Statistika:\n\n"
-        f"👤 Users: {len(users)}\n"
-        f"🎬 Kinolar: {len(kino_db)}"
+        f"🎬 Kinolar: {len(kino_db)}\n"
+        f"📢 Kanallar: {len(CHANNELS)}"
     )
 
 
-# ─── CHANNEL SAVE POST ──────────────────
+# ─────────────────────────────────────────
+# CHANNEL ADD
+# ─────────────────────────────────────────
+@dp.message_handler(commands=["addchannel"])
+@admin_only
+async def add_channel(message: Message):
+    try:
+        _, ch = message.text.split()
+
+        if ch not in CHANNELS:
+            CHANNELS.append(ch)
+            save_json(CHANNEL_FILE, CHANNELS)
+
+        await message.answer(f"✅ Qo‘shildi: {ch}")
+    except:
+        await message.answer("❌ /addchannel @kanal")
+
+
+# ─────────────────────────────────────────
+# CHANNEL REMOVE
+# ─────────────────────────────────────────
+@dp.message_handler(commands=["removechannel"])
+@admin_only
+async def remove_channel(message: Message):
+    try:
+        _, ch = message.text.split()
+
+        if ch in CHANNELS:
+            CHANNELS.remove(ch)
+            save_json(CHANNEL_FILE, CHANNELS)
+
+        await message.answer(f"❌ O‘chirildi: {ch}")
+    except:
+        await message.answer("❌ /removechannel @kanal")
+
+
+# ─────────────────────────────────────────
+# CHANNEL LIST
+# ─────────────────────────────────────────
+@dp.message_handler(commands=["channels"])
+@admin_only
+async def channels(message: Message):
+    text = "📢 Kanallar:\n\n"
+    for ch in CHANNELS:
+        text += f"• {ch}\n"
+    await message.answer(text)
+
+
+# ─────────────────────────────────────────
+# SAVE CHANNEL POST
+# ─────────────────────────────────────────
 @dp.channel_post_handler(content_types=types.ContentType.ANY)
 async def save_post(message: types.Message):
     kod = (message.text or message.caption or "").lower().strip()
@@ -166,15 +237,15 @@ async def save_post(message: types.Message):
     }
 
     save_json(KINO_DB_FILE, kino_db)
-    logging.info(f"Saved: {kod}")
 
 
-# ─── MAIN HANDLER ───────────────────────
+# ─────────────────────────────────────────
+# MAIN HANDLER
+# ─────────────────────────────────────────
 @dp.message_handler(content_types=types.ContentType.TEXT)
 async def handle(message: Message):
     user_id = message.from_user.id
 
-    # anti spam
     if user_id in last_used and time.time() - last_used[user_id] < 2:
         return
     last_used[user_id] = time.time()
@@ -202,11 +273,9 @@ async def handle(message: Message):
         await message.answer("❌ Xatolik")
 
 
-# ─── START BOT ──────────────────────────
-async def on_startup(_):
-    logging.info("Bot ishga tushdi")
-
-
+# ─────────────────────────────────────────
+# START BOT
+# ─────────────────────────────────────────
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
-    executor.start_polling(dp, skip_updates=True, on_startup=on_startup)
+    executor.start_polling(dp, skip_updates=True)

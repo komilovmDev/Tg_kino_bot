@@ -16,23 +16,22 @@ import db
 
 load_dotenv()
 
-API_TOKEN = os.getenv('API_TOKEN')
-ADMIN_ID = int(os.getenv('ADMIN_ID', 0))
+API_TOKEN = os.getenv("API_TOKEN")
+ADMIN_ID = int(os.getenv("ADMIN_ID", 0))
+CHANNEL_ID = int(os.getenv("CHANNEL_ID", -1003928462353))
 
 if not API_TOKEN:
-    raise RuntimeError('API_TOKEN is not set')
+    raise RuntimeError("API_TOKEN yo'q")
 if not ADMIN_ID:
-    raise RuntimeError('ADMIN_ID is not set')
+    raise RuntimeError("ADMIN_ID yo'q")
 
 bot = Bot(token=API_TOKEN)
 dp = Dispatcher(bot)
 
-CHANNELS = [
-    '@spritefx_tp',
-    # '@kanal2',
-]
-CHANNEL_ID = -1003928462353
-KINO_DB_FILE = 'kino_db.json'
+KINO_DB_FILE = "kino_db.json"
+CHANNEL_FILE = "channels.json"
+
+last_used: dict = {}
 
 LANG_FLAGS = {
     'ru': '🇷🇺 RU', 'uz': '🇺🇿 UZ', 'uk': '🇺🇦 UK', 'en': '🇺🇸 EN',
@@ -42,31 +41,52 @@ LANG_FLAGS = {
     'ja': '🇯🇵 JA', 'ko': '🇰🇷 KO', 'hi': '🇮🇳 HI', 'fa': '🇮🇷 FA',
 }
 
-last_used: dict = {}
+
+# ─── LOAD / SAVE ──────────────────────────────────────────────────────────────
+
+def load_json(file, default):
+    if os.path.exists(file):
+        with open(file, "r", encoding="utf-8") as f:
+            return json.load(f)
+    return default
 
 
-# ─── KINO DB ──────────────────────────────────────────────────────────────────
-
-def load_kino_db() -> dict:
-    if os.path.exists(KINO_DB_FILE):
-        with open(KINO_DB_FILE, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-        for k, v in data.items():
-            if isinstance(v, int):
-                data[k] = {'msg_id': v, 'count': 0}
-        return data
-    return {}
-
-
-def save_kino_db(data: dict):
-    with open(KINO_DB_FILE, 'w', encoding='utf-8') as f:
+def save_json(file, data):
+    with open(file, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
 
 
-kino_db = load_kino_db()
+kino_db = load_json(KINO_DB_FILE, {})
+# migrate old format: plain int → {msg_id, count}
+for _k, _v in kino_db.items():
+    if isinstance(_v, int):
+        kino_db[_k] = {"msg_id": _v, "count": 0}
+
+CHANNELS: list = load_json(CHANNEL_FILE, ["@spritefx_tp"])
 
 
 # ─── HELPERS ──────────────────────────────────────────────────────────────────
+
+def admin_only(func):
+    @wraps(func)
+    async def wrapper(message: Message):
+        if message.from_user.id != ADMIN_ID:
+            return await message.answer("❌ Ruxsat yo'q")
+        return await func(message)
+    return wrapper
+
+
+async def check_sub(user_id: int) -> bool:
+    for ch in CHANNELS:
+        try:
+            member = await bot.get_chat_member(ch, user_id)
+            if member.status not in ["member", "creator", "administrator"]:
+                return False
+        except Exception as e:
+            logging.warning(f"check_sub {user_id} in {ch}: {e}")
+            return False
+    return True
+
 
 async def fetch_and_save_photo(user_id: int):
     try:
@@ -75,29 +95,7 @@ async def fetch_and_save_photo(user_id: int):
             file_id = photos.photos[0][-1].file_id
             await db.save_photo(user_id, file_id)
     except Exception as e:
-        logging.warning(f'fetch_photo error for {user_id}: {e}')
-
-
-async def check_sub(user_id: int) -> bool:
-    for ch in CHANNELS:
-        try:
-            member = await bot.get_chat_member(ch, user_id)
-            if member.status not in ['member', 'creator', 'administrator']:
-                return False
-        except Exception as e:
-            logging.warning(f'check_sub error for {user_id} in {ch}: {e}')
-            return False
-    return True
-
-
-def admin_only(func):
-    @wraps(func)
-    async def wrapper(message: Message):
-        if message.from_user.id != ADMIN_ID:
-            await message.answer("❌ Sizda ruxsat yo'q.")
-            return
-        await func(message)
-    return wrapper
+        logging.warning(f"fetch_photo {user_id}: {e}")
 
 
 # ─── MIDDLEWARE ───────────────────────────────────────────────────────────────
@@ -117,51 +115,45 @@ class UserMiddleware(BaseMiddleware):
 dp.middleware.setup(UserMiddleware())
 
 
-# ─── USER COMMANDS ────────────────────────────────────────────────────────────
+# ─── START ────────────────────────────────────────────────────────────────────
 
-@dp.message_handler(commands=['start'])
-async def start_handler(message: Message):
+@dp.message_handler(commands=["start"])
+async def start(message: Message):
     if not await check_sub(message.from_user.id):
-        btn = types.InlineKeyboardMarkup()
+        kb = types.InlineKeyboardMarkup()
         for ch in CHANNELS:
-            btn.add(types.InlineKeyboardButton(f"📢 {ch}", url=f"https://t.me/{ch[1:]}"))
-        btn.add(types.InlineKeyboardButton("✅ Tekshirish", callback_data="check_sub"))
-        await message.answer(
+            kb.add(types.InlineKeyboardButton(f"📢 {ch}", url=f"https://t.me/{ch[1:]}"))
+        kb.add(types.InlineKeyboardButton("✅ Tekshirish", callback_data="check"))
+        return await message.answer(
             "❗ Botdan foydalanish uchun kanallarga obuna bo'ling:",
-            reply_markup=btn
+            reply_markup=kb
         )
-        return
-    await message.answer("🎬 Kino botga xush kelibsiz!\n\nKod yuboring (masalan: k1)")
+    await message.answer("🎬 Kino botga xush kelibsiz!\nKod yuboring (k1, k2 ...)")
 
 
-@dp.callback_query_handler(lambda c: c.data == "check_sub")
-async def check_button(call: types.CallbackQuery):
+@dp.callback_query_handler(lambda c: c.data == "check")
+async def check_callback(call: types.CallbackQuery):
     if await check_sub(call.from_user.id):
-        await call.message.edit_text("✅ Endi foydalanishingiz mumkin!")
+        await call.message.edit_text("✅ Obuna tasdiqlandi")
     else:
         await call.answer("❌ Hali obuna bo'lmadingiz", show_alert=True)
 
 
-@dp.message_handler(commands=['test'])
-async def test(message: Message):
-    await message.answer("✅ Bot ishlayapti!")
-
-
 # ─── ADMIN: KINO ──────────────────────────────────────────────────────────────
 
-@dp.message_handler(commands=['add'])
+@dp.message_handler(commands=["add"])
 @admin_only
 async def add_kino(message: Message):
     try:
         _, kod, msg_id = message.text.split()
-        kino_db[kod.lower()] = {'msg_id': int(msg_id), 'count': 0}
-        save_kino_db(kino_db)
-        await message.answer(f"✅ Qo'shildi: {kod} → {msg_id}")
+        kino_db[kod.lower()] = {"msg_id": int(msg_id), "count": 0}
+        save_json(KINO_DB_FILE, kino_db)
+        await message.answer(f"✅ Kino qo'shildi: {kod}")
     except ValueError:
-        await message.answer("❌ Format: /add k1 45")
+        await message.answer("❌ Format: /add k1 123")
 
 
-@dp.message_handler(commands=['delete'])
+@dp.message_handler(commands=["delete"])
 @admin_only
 async def delete_kino(message: Message):
     try:
@@ -169,56 +161,87 @@ async def delete_kino(message: Message):
         kod = kod.lower()
         if kod in kino_db:
             del kino_db[kod]
-            save_kino_db(kino_db)
+            save_json(KINO_DB_FILE, kino_db)
             await message.answer(f"✅ O'chirildi: {kod}")
         else:
-            await message.answer(f"❌ Bunday kod yo'q: {kod}")
+            await message.answer("❌ Topilmadi")
     except ValueError:
         await message.answer("❌ Format: /delete k1")
 
 
-@dp.message_handler(commands=['list'])
+@dp.message_handler(commands=["list"])
 @admin_only
 async def list_kino(message: Message):
     if not kino_db:
-        await message.answer("📭 Bazada hech narsa yo'q.")
-        return
+        return await message.answer("📭 Bazada hech narsa yo'q")
     lines = [f"{kod} — {v['count']} ko'rildi" for kod, v in sorted(kino_db.items())]
     await message.answer("📋 Barcha kinolar:\n\n" + "\n".join(lines))
 
 
-@dp.message_handler(commands=['top'])
+@dp.message_handler(commands=["top"])
 @admin_only
-async def top_kino(message: Message):
+async def top(message: Message):
     if not kino_db:
-        await message.answer("📭 Bo'sh")
-        return
-    sorted_kino = sorted(kino_db.items(), key=lambda x: x[1]['count'], reverse=True)
+        return await message.answer("📭 Bo'sh")
+    sorted_kino = sorted(kino_db.items(), key=lambda x: x[1]["count"], reverse=True)
     lines = [f"{i}. {kod} — {v['count']} marta" for i, (kod, v) in enumerate(sorted_kino[:10], 1)]
     await message.answer("📈 TOP kinolar:\n\n" + "\n".join(lines))
 
 
+# ─── ADMIN: CHANNELS ──────────────────────────────────────────────────────────
+
+@dp.message_handler(commands=["addchannel"])
+@admin_only
+async def add_channel(message: Message):
+    try:
+        _, ch = message.text.split()
+        if ch not in CHANNELS:
+            CHANNELS.append(ch)
+            save_json(CHANNEL_FILE, CHANNELS)
+        await message.answer(f"✅ Qo'shildi: {ch}")
+    except ValueError:
+        await message.answer("❌ Format: /addchannel @kanal")
+
+
+@dp.message_handler(commands=["removechannel"])
+@admin_only
+async def remove_channel(message: Message):
+    try:
+        _, ch = message.text.split()
+        if ch in CHANNELS:
+            CHANNELS.remove(ch)
+            save_json(CHANNEL_FILE, CHANNELS)
+        await message.answer(f"✅ O'chirildi: {ch}")
+    except ValueError:
+        await message.answer("❌ Format: /removechannel @kanal")
+
+
+@dp.message_handler(commands=["channels"])
+@admin_only
+async def list_channels(message: Message):
+    text = "📢 Kanallar:\n\n" + "\n".join(f"• {ch}" for ch in CHANNELS)
+    await message.answer(text)
+
+
 # ─── ADMIN: СТАТИСТИКА ────────────────────────────────────────────────────────
 
-@dp.message_handler(commands=['stat'])
+@dp.message_handler(commands=["stat"])
 @admin_only
 async def stat_handler(message: Message):
     s = await db.get_stats()
-    total = s['total'] or 1
+    total = s["total"] or 1
 
     lang_lines = []
     other_count = 0
-    for row in s['langs']:
-        code = (row['language_code'] or '').lower()
+    for row in s["langs"]:
+        code = (row["language_code"] or "").lower()
         if code in LANG_FLAGS:
-            pct = round(row['cnt'] / total * 100, 1)
+            pct = round(row["cnt"] / total * 100, 1)
             lang_lines.append(f"{LANG_FLAGS[code]}: {pct}%")
         else:
-            other_count += row['cnt']
+            other_count += row["cnt"]
     if other_count:
         lang_lines.append(f"🏳️ Прочие: {round(other_count / total * 100, 1)}%")
-
-    langs_text = "\n".join(lang_lines) if lang_lines else "Нет данных"
 
     await message.answer(
         f"📊 Статистика\n\n"
@@ -227,7 +250,7 @@ async def stat_handler(message: Message):
         f"🟢 Живые: {s['alive']}\n"
         f"💀 Мёртвые: {s['dead']}\n"
         f"🚫 Заблок: {s['blocked']}\n\n"
-        f"Языки:\n{langs_text}\n"
+        f"Языки:\n" + "\n".join(lang_lines or ["Нет данных"]) + "\n"
         f"———\n\n"
         f"🆕 Новые: {s['new_today']} / {s['new_7d']} / {s['new_30d']}\n"
         f"   (сегодня / 7д / 30д)\n\n"
@@ -236,44 +259,41 @@ async def stat_handler(message: Message):
         f"✅ Запросов: {s['searches_today']} / {s['searches_7d']}\n"
         f"   (сегодня / 7д)\n\n"
         f"🎬 Кино в базе: {len(kino_db)}\n"
+        f"📢 Кanallar: {len(CHANNELS)}\n"
         f"📈 Ср. запросов/юзер: {s['avg_searches']}"
     )
 
 
 # ─── ADMIN: ПРОФИЛЬ ПОЛЬЗОВАТЕЛЯ ─────────────────────────────────────────────
 
-@dp.message_handler(commands=['user'])
+@dp.message_handler(commands=["user"])
 @admin_only
 async def user_profile(message: Message):
     parts = message.text.split()
     if len(parts) < 2:
-        await message.answer("❌ Format: /user 123456789")
-        return
+        return await message.answer("❌ Format: /user 123456789")
     try:
         uid = int(parts[1])
     except ValueError:
-        await message.answer("❌ ID должен быть числом")
-        return
+        return await message.answer("❌ ID должен быть числом")
 
     user = await db.get_user(uid)
     if not user:
-        await message.answer("❌ Пользователь не найден в базе")
-        return
+        return await message.answer("❌ Пользователь не найден в базе")
 
     history = await db.get_user_history(uid)
-    found_count = sum(1 for h in history if h['found'])
+    found_count = sum(1 for h in history if h["found"])
 
-    name = ' '.join(filter(None, [user['first_name'], user['last_name']])) or 'Без имени'
-    username = f"@{user['username']}" if user['username'] else '—'
-    lang_code = (user['language_code'] or '').lower()
+    name = " ".join(filter(None, [user["first_name"], user["last_name"]])) or "Без имени"
+    username = f"@{user['username']}" if user["username"] else "—"
+    lang_code = (user["language_code"] or "").lower()
     lang = LANG_FLAGS.get(lang_code, f"🏳️ {user['language_code'] or '?'}")
-    status = "🚫 Заблокировал" if user['is_blocked'] else "✅ Активен"
+    status = "🚫 Заблокировал" if user["is_blocked"] else "✅ Активен"
 
-    history_lines = []
-    for h in history[:10]:
-        icon = "✅" if h['found'] else "❌"
-        dt = str(h['created_at'])[:16]
-        history_lines.append(f"  {icon} {h['kod']} — {dt}")
+    history_lines = [
+        f"  {'✅' if h['found'] else '❌'} {h['kod']} — {str(h['created_at'])[:16]}"
+        for h in history[:10]
+    ]
     history_text = "\n".join(history_lines) if history_lines else "  Нет запросов"
 
     caption = (
@@ -289,75 +309,58 @@ async def user_profile(message: Message):
         f"📜 История (последние 10):\n{history_text}"
     )
 
-    if user['photo_file_id']:
-        await message.answer_photo(
-            photo=user['photo_file_id'], caption=caption, parse_mode='HTML'
-        )
+    if user["photo_file_id"]:
+        await message.answer_photo(photo=user["photo_file_id"], caption=caption, parse_mode="HTML")
     else:
-        await message.answer(caption, parse_mode='HTML')
+        await message.answer(caption, parse_mode="HTML")
 
 
 # ─── CHANNEL POSTS ────────────────────────────────────────────────────────────
 
 @dp.channel_post_handler(content_types=types.ContentType.ANY)
 async def save_post(message: types.Message):
-    kod = None
-    if message.caption:
-        kod = message.caption.strip().lower()
-    elif message.text:
-        kod = message.text.strip().lower()
-    if not kod:
+    kod = (message.text or message.caption or "").lower().strip()
+    if not kod.startswith("k"):
         return
-    kino_db[kod] = {'msg_id': message.message_id, 'count': 0}
-    save_kino_db(kino_db)
+    kino_db[kod] = {"msg_id": message.message_id, "count": 0}
+    save_json(KINO_DB_FILE, kino_db)
     logging.info(f"Saved from channel: {kod} → {message.message_id}")
 
 
-# ─── MAIN MESSAGE HANDLER ─────────────────────────────────────────────────────
+# ─── MAIN HANDLER ─────────────────────────────────────────────────────────────
 
-@dp.message_handler(content_types=types.ContentType.ANY)
-async def message_handler(message: Message):
+@dp.message_handler(content_types=types.ContentType.TEXT)
+async def handle(message: Message):
     user_id = message.from_user.id
 
     if user_id in last_used and time.time() - last_used[user_id] < 2:
         return
     last_used[user_id] = time.time()
 
-    if message.forward_from_chat:
-        logging.info(f"Forward message ID: {message.forward_from_message_id}")
-        return
-
-    if not message.text or message.text.startswith('/'):
-        return
-
     if not await check_sub(user_id):
-        await message.answer("❗ Avval obuna bo'ling /start")
-        return
+        return await message.answer("❗ Avval obuna bo'ling /start")
 
-    kod = message.text.strip().lower()
+    kod = message.text.lower().strip()
     found = kod in kino_db
-
     await db.log_search(user_id, kod, found)
 
     if not found:
-        await message.answer("❌ Bunday kod yo'q.")
-        return
+        return await message.answer("❌ Kod topilmadi")
 
-    entry = kino_db[kod]
-    entry['count'] += 1
-    save_kino_db(kino_db)
+    kino_db[kod]["count"] += 1
+    save_json(KINO_DB_FILE, kino_db)
 
     try:
         await bot.copy_message(
             chat_id=message.chat.id,
             from_chat_id=CHANNEL_ID,
-            message_id=entry['msg_id']
+            message_id=kino_db[kod]["msg_id"]
         )
     except BotBlocked:
         await db.mark_blocked(user_id)
     except Exception as e:
-        logging.error(f"copy_message error for kod={kod}: {e}")
-        await message.answer("❌ Kino topilmadi yoki xatolik.")
+        logging.error(f"copy_message error kod={kod}: {e}")
+        await message.answer("❌ Xatolik")
 
 
 # ─── STARTUP ──────────────────────────────────────────────────────────────────
@@ -368,6 +371,6 @@ async def on_startup(_):
     logging.info("Bot started")
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
     executor.start_polling(dp, skip_updates=True, on_startup=on_startup)

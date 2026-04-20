@@ -47,7 +47,7 @@ def save_json(file, data):
 
 
 kino_db = load_json(KINO_DB_FILE, {})
-CHANNELS = load_json(CHANNEL_FILE, ["@spritefx_tp"])
+CHANNELS = load_json(CHANNEL_FILE, ["@spritefx_tp", "@kinotriler_bot"])
 
 # ─────────────────────────────────────────
 # ADMIN CHECK

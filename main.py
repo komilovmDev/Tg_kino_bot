@@ -1,4 +1,3 @@
-import asyncio
 import json
 import logging
 import os
@@ -14,9 +13,9 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-CHANNEL_ID = -1003928462353
 API_TOKEN = os.getenv("API_TOKEN")
 ADMIN_ID = int(os.getenv("ADMIN_ID", 0))
+CHANNEL_ID = int(os.getenv("CHANNEL_ID", -1003928462353))
 
 if not API_TOKEN:
     raise RuntimeError("API_TOKEN yo‘q")
@@ -24,17 +23,13 @@ if not API_TOKEN:
 bot = Bot(token=API_TOKEN)
 dp = Dispatcher(bot)
 
-# ─────────────────────────────────────────
 # FILES
-# ─────────────────────────────────────────
 KINO_DB_FILE = "kino_db.json"
 CHANNEL_FILE = "channels.json"
 
 last_used = {}
 
-# ─────────────────────────────────────────
-# LOAD/SAVE HELPERS
-# ─────────────────────────────────────────
+# LOAD / SAVE
 def load_json(file, default):
     if os.path.exists(file):
         with open(file, "r", encoding="utf-8") as f:
@@ -48,11 +43,15 @@ def save_json(file, data):
 
 
 kino_db = load_json(KINO_DB_FILE, {})
-CHANNELS = load_json(CHANNEL_FILE, ["@spritefx_tp", "@kinotriler_bot"])
+CHANNELS = load_json(CHANNEL_FILE, ["@spritefx_tp"])
 
-# ─────────────────────────────────────────
-# ADMIN CHECK
-# ─────────────────────────────────────────
+# eski formatni fix qilish
+for k, v in kino_db.items():
+    if isinstance(v, int):
+        kino_db[k] = {"msg_id": v, "count": 0}
+
+
+# ADMIN
 def admin_only(func):
     @wraps(func)
     async def wrapper(message: Message):
@@ -62,9 +61,7 @@ def admin_only(func):
     return wrapper
 
 
-# ─────────────────────────────────────────
-# CHECK SUB
-# ─────────────────────────────────────────
+# SUB CHECK
 async def check_sub(user_id: int):
     for ch in CHANNELS:
         try:
@@ -76,41 +73,29 @@ async def check_sub(user_id: int):
     return True
 
 
-# ─────────────────────────────────────────
 # START
-# ─────────────────────────────────────────
 @dp.message_handler(commands=["start"])
 async def start(message: Message):
     if not await check_sub(message.from_user.id):
         kb = types.InlineKeyboardMarkup()
-
         for ch in CHANNELS:
             kb.add(types.InlineKeyboardButton(f"📢 {ch}", url=f"https://t.me/{ch[1:]}"))
-
         kb.add(types.InlineKeyboardButton("✅ Tekshirish", callback_data="check"))
-
-        return await message.answer(
-            "❗ Botdan foydalanish uchun kanallarga obuna bo‘ling:",
-            reply_markup=kb
-        )
+        return await message.answer("❗ Avval obuna bo‘ling:", reply_markup=kb)
 
     await message.answer("🎬 Kino botga xush kelibsiz!\nKod yuboring (k1, k2 ...)")
 
 
-# ─────────────────────────────────────────
 # CHECK BUTTON
-# ─────────────────────────────────────────
 @dp.callback_query_handler(lambda c: c.data == "check")
-async def check(call: types.CallbackQuery):
+async def check_callback(call: types.CallbackQuery):
     if await check_sub(call.from_user.id):
         await call.message.edit_text("✅ Obuna tasdiqlandi")
     else:
-        await call.answer("❌ Hali obuna bo‘lmadingiz", show_alert=True)
+        await call.answer("❌ Obuna bo‘lmadingiz", show_alert=True)
 
 
-# ─────────────────────────────────────────
 # ADD KINO
-# ─────────────────────────────────────────
 @dp.message_handler(commands=["add"])
 @admin_only
 async def add_kino(message: Message):
@@ -118,34 +103,28 @@ async def add_kino(message: Message):
         _, kod, msg_id = message.text.split()
         kino_db[kod.lower()] = {"msg_id": int(msg_id), "count": 0}
         save_json(KINO_DB_FILE, kino_db)
-        await message.answer("✅ Kino qo‘shildi")
+        await message.answer("✅ Qo‘shildi")
     except:
-        await message.answer("❌ Format: /add k1 123")
+        await message.answer("❌ /add k1 123")
 
 
-# ─────────────────────────────────────────
-# DELETE KINO
-# ─────────────────────────────────────────
+# DELETE
 @dp.message_handler(commands=["delete"])
 @admin_only
 async def delete_kino(message: Message):
     try:
         _, kod = message.text.split()
-        kod = kod.lower()
-
         if kod in kino_db:
             del kino_db[kod]
             save_json(KINO_DB_FILE, kino_db)
-            await message.answer("❌ O‘chirildi")
+            await message.answer("✅ O‘chirildi")
         else:
             await message.answer("❌ Topilmadi")
     except:
-        await message.answer("❌ Format: /delete k1")
+        await message.answer("❌ /delete k1")
 
 
-# ─────────────────────────────────────────
-# TOP KINO
-# ─────────────────────────────────────────
+# TOP
 @dp.message_handler(commands=["top"])
 @admin_only
 async def top(message: Message):
@@ -161,70 +140,40 @@ async def top(message: Message):
     await message.answer(text)
 
 
-# ─────────────────────────────────────────
-# STATS
-# ─────────────────────────────────────────
-@dp.message_handler(commands=["stats"])
-@admin_only
-async def stats(message: Message):
-    await message.answer(
-        f"📊 Statistika:\n\n"
-        f"🎬 Kinolar: {len(kino_db)}\n"
-        f"📢 Kanallar: {len(CHANNELS)}"
-    )
-
-
-# ─────────────────────────────────────────
-# CHANNEL ADD
-# ─────────────────────────────────────────
+# CHANNEL COMMANDS
 @dp.message_handler(commands=["addchannel"])
 @admin_only
 async def add_channel(message: Message):
     try:
         _, ch = message.text.split()
-
         if ch not in CHANNELS:
             CHANNELS.append(ch)
             save_json(CHANNEL_FILE, CHANNELS)
-
-        await message.answer(f"✅ Qo‘shildi: {ch}")
+        await message.answer("✅ Qo‘shildi")
     except:
         await message.answer("❌ /addchannel @kanal")
 
 
-# ─────────────────────────────────────────
-# CHANNEL REMOVE
-# ─────────────────────────────────────────
 @dp.message_handler(commands=["removechannel"])
 @admin_only
 async def remove_channel(message: Message):
     try:
         _, ch = message.text.split()
-
         if ch in CHANNELS:
             CHANNELS.remove(ch)
             save_json(CHANNEL_FILE, CHANNELS)
-
-        await message.answer(f"❌ O‘chirildi: {ch}")
+        await message.answer("❌ O‘chirildi")
     except:
         await message.answer("❌ /removechannel @kanal")
 
 
-# ─────────────────────────────────────────
-# CHANNEL LIST
-# ─────────────────────────────────────────
 @dp.message_handler(commands=["channels"])
 @admin_only
-async def channels(message: Message):
-    text = "📢 Kanallar:\n\n"
-    for ch in CHANNELS:
-        text += f"• {ch}\n"
-    await message.answer(text)
+async def list_channels(message: Message):
+    await message.answer("\n".join(CHANNELS) or "Bo‘sh")
 
 
-# ─────────────────────────────────────────
-# SAVE CHANNEL POST
-# ─────────────────────────────────────────
+# SAVE POST
 @dp.channel_post_handler(content_types=types.ContentType.ANY)
 async def save_post(message: types.Message):
     kod = (message.text or message.caption or "").lower().strip()
@@ -232,17 +181,12 @@ async def save_post(message: types.Message):
     if not kod.startswith("k"):
         return
 
-    kino_db[kod] = {
-        "msg_id": message.message_id,
-        "count": 0
-    }
-
+    kino_db[kod] = {"msg_id": message.message_id, "count": 0}
     save_json(KINO_DB_FILE, kino_db)
+    logging.info(f"Saved: {kod}")
 
 
-# ─────────────────────────────────────────
-# MAIN HANDLER
-# ─────────────────────────────────────────
+# MAIN
 @dp.message_handler(content_types=types.ContentType.TEXT)
 async def handle(message: Message):
     user_id = message.from_user.id
@@ -252,12 +196,12 @@ async def handle(message: Message):
     last_used[user_id] = time.time()
 
     if not await check_sub(user_id):
-        return await message.answer("❗ Avval obuna bo‘ling")
+        return await message.answer("❗ Obuna bo‘ling")
 
     kod = message.text.lower().strip()
 
     if kod not in kino_db:
-        return await message.answer("❌ Kod topilmadi")
+        return await message.answer("❌ Topilmadi")
 
     kino_db[kod]["count"] += 1
     save_json(KINO_DB_FILE, kino_db)
@@ -270,13 +214,12 @@ async def handle(message: Message):
         )
     except BotBlocked:
         await message.answer("❌ Bot bloklangan")
-    except:
+    except Exception as e:
+        logging.error(e)
         await message.answer("❌ Xatolik")
 
 
-# ─────────────────────────────────────────
-# START BOT
-# ─────────────────────────────────────────
+# START
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
     executor.start_polling(dp, skip_updates=True)

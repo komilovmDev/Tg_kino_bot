@@ -14,6 +14,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+CHANNEL_ID = -1003928462353
 API_TOKEN = os.getenv("API_TOKEN")
 ADMIN_ID = int(os.getenv("ADMIN_ID", 0))
 
